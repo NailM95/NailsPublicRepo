@@ -1,5 +1,5 @@
 """
-3D building-height map for Baku.
+3D building-height map for Baku, Astana, Almaty and Tashkent.
 
 Data: OpenStreetMap building footprints (height / building:levels tags) via OSMnx,
       which queries the public Overpass API. Basemap tiles come from CARTO.
@@ -9,7 +9,7 @@ Hovering a building shows its name, address and height (from OSM address tags).
 Install:
     pip install streamlit "osmnx>=2.0" geopandas pydeck matplotlib
 Run:
-    streamlit run baku_tall_buildings.py
+    streamlit run city_building_heights.py
 """
 import html
 import json
@@ -22,11 +22,15 @@ import pydeck as pdk
 import streamlit as st
 from matplotlib import colormaps
 
-st.set_page_config(page_title="Baku building heights", layout="wide")
+st.set_page_config(page_title="Building heights", layout="wide")
 
-# West, South, East, North — central Baku. Widen it for the whole city.
-DEFAULT_BBOX = (49.78, 40.35, 49.97, 40.44)
-UTM_BAKU = 32639  # UTM zone 39N, metric CRS for area calculations
+# West, South, East, North — city centres. Widen them in the sidebar for the whole city.
+CITIES = {
+    "Baku":     {"bbox": (49.78, 40.35, 49.97, 40.44), "bearing": -20},
+    "Astana":   {"bbox": (71.36, 51.08, 71.52, 51.19), "bearing": 0},
+    "Almaty":   {"bbox": (76.85, 43.20, 76.98, 43.28), "bearing": 0},
+    "Tashkent": {"bbox": (69.20, 41.27, 69.33, 41.35), "bearing": 0},
+}
 UNKNOWN_GREY = [190, 190, 190]
 
 
@@ -82,7 +86,8 @@ def load_buildings(bbox: tuple, floor_height: float) -> gpd.GeoDataFrame:
     gdf["height_source"] = np.select(
         [height.notna(), levels.notna()], ["height tag", "levels tag"], "unknown"
     )
-    gdf["area_m2"] = gdf.to_crs(UTM_BAKU).area.values
+    # Pick the right UTM zone for whichever city is loaded (39N Baku, 42N Astana/Tashkent, 43N Almaty)
+    gdf["area_m2"] = gdf.to_crs(gdf.estimate_utm_crs()).area.values
     gdf["name"] = gdf["name"].fillna("").astype(str) if "name" in gdf.columns else ""
     gdf["address"] = build_address(gdf)
 
@@ -102,7 +107,11 @@ def colorize(values, clip_pct: float):
 # ---------------------------------------------------------------- sidebar
 with st.sidebar:
     st.header("Settings")
-    bbox_text = st.text_input("Bounding box (W, S, E, N)", ",".join(map(str, DEFAULT_BBOX)))
+    city = st.selectbox("City", list(CITIES))
+    preset = CITIES[city]
+    # Keyed per city so switching cities resets the box to that city's default
+    bbox_text = st.text_input("Bounding box (W, S, E, N)",
+                              ",".join(map(str, preset["bbox"])), key=f"bbox_{city}")
     bbox = tuple(float(x) for x in bbox_text.split(","))
     floor_height = st.slider("Assumed floor height (m)", 2.5, 4.0, 3.0, 0.1)
     min_height = st.slider("Show buildings from (m)", 0, 150, 0, 5,
@@ -111,6 +120,8 @@ with st.sidebar:
     clip_pct = st.slider("Color scale cap (percentile)", 80, 100, 98,
                          help="Stops a few very tall towers from turning everything else blue.")
     opacity = st.slider("Opacity", 0.1, 1.0, 0.8, 0.05)
+
+st.title(f"{city} building heights")
 
 # ---------------------------------------------------------------- data + coverage
 buildings = load_buildings(bbox, floor_height)
@@ -163,7 +174,7 @@ deck = pdk.Deck(
     layers=[layer],
     initial_view_state=pdk.ViewState(
         latitude=(bbox[1] + bbox[3]) / 2, longitude=(bbox[0] + bbox[2]) / 2,
-        zoom=13.5, pitch=50, bearing=-20,
+        zoom=13.5, pitch=50, bearing=preset["bearing"],
     ),
     map_provider="carto",
     map_style="light",
@@ -173,4 +184,4 @@ deck = pdk.Deck(
 st.pydeck_chart(deck, height=720)
 
 st.download_button("Download map as HTML", deck.to_html(as_string=True),
-                   file_name="baku_building_heights.html", mime="text/html")
+                   file_name=f"{city.lower()}_building_heights.html", mime="text/html")
